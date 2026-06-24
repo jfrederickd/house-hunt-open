@@ -1,0 +1,40 @@
+# Fly.io config. Set `app` to your own unique name (or let `fly launch` set it),
+# and `primary_region` to one near you (https://fly.io/docs/reference/regions/).
+app = "house-hunt-dashboard"
+primary_region = "syd"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  # SQLite lives on the mounted volume so it survives deploys/restarts.
+  DATABASE_URL = "file:/data/dashboard.db"
+  NODE_ENV = "production"
+  # APP_PASSWORD and AUTH_SECRET are set as secrets, NOT here:
+  #   fly secrets set APP_PASSWORD=... AUTH_SECRET=...
+
+# Persistent disk for the database AND uploaded photos (public/uploads is
+# symlinked to /data/uploads at boot).
+[mounts]
+  source = "househunt_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Scale to zero when idle to keep costs near nothing; wakes on the next request.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "get"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

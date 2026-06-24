@@ -1,0 +1,223 @@
+// Private House-Hunt Dashboard — Prisma schema (section 4 of the build plan).
+// SQLite has no native enums, so enum-like fields are stored as String with the
+// allowed values documented inline and validated in the app layer (src/lib/enums.ts).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Property {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Contact
+  contactName      String?
+  organisedThrough String? // phone | messenger | other
+
+  // Address
+  addressRaw      String
+  streetAddress   String?
+  suburb          String?
+  city            String?
+  postcode        String?
+  lat             Float?
+  lng             Float?
+  geocodeStatus   String  @default("manual") // ok | ambiguous | failed | manual
+  addressComplete Boolean @default(true) // false when no street number (e.g. "Tui St")
+
+  // Pipeline
+  // new | contacted | viewing_scheduled | viewed | offer_made | negotiating | under_contract | purchased | passed
+  status String @default("new")
+
+  // Valuation
+  capitalValue        Float?
+  capitalValueDate    DateTime?
+  landValue           Float?
+  improvementValue    Float?
+  homesEstimate       Float?
+  homesEstimateLow    Float?
+  homesEstimateHigh   Float?
+  otherEstimate       Float?
+  otherEstimateSource String?
+
+  // Facts
+  bedrooms     Int?
+  bathrooms    Int?
+  parking      Int?
+  floorAreaM2  Float?
+  landAreaM2   Float?
+  yearBuilt    Int?
+  propertyType String?
+
+  // Sale (latest; full history in SaleRecord[])
+  lastSalePrice Float?
+  lastSaleDate  DateTime?
+
+  // Offer
+  recommendedOfferLow  Float?
+  recommendedOfferHigh Float?
+  offerRationale       String?
+  ourMaxBudget         Float?
+
+  // Negotiation (used in the negotiating phase)
+  ourOffer     Float? // the offer we've put forward
+  counterOffer Float? // the vendor's counter
+
+  // Flood risk (manually recorded from the CCC flood viewer)
+  // high | moderate | low | none | unmodelled
+  floodRisk String?
+
+  // Comparables (optional input for the offer engine)
+  compPricePerM2 Float? // local comparable $/m2 (floor), entered manually
+
+  // Image (primary listing photo URL — pasted, never scraped)
+  imageUrl String?
+
+  // Provenance
+  fieldSources String? // JSON map of field -> manual|api|estimated
+  sourceUrls   String? // JSON map of label -> url
+  notes        String? // legacy free-text; timeline lives in Note[]
+
+  saleRecords       SaleRecord[]
+  viewings          Viewing[]
+  photos            Photo[]
+  noteEntries       Note[]
+  dueDiligenceItems DueDiligenceItem[]
+  assessments       CriterionAssessment[]
+}
+
+model SaleRecord {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  saleDate   DateTime
+  salePrice  Float
+  source     String? // manual | api | estimated
+
+  @@index([propertyId])
+}
+
+model Viewing {
+  id            String    @id @default(cuid())
+  propertyId    String
+  property      Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  scheduledDate DateTime?
+  scheduledTime String? // free-form "2:30 PM" — kept separate from date for simplicity
+  status        String    @default("planned") // planned | completed | cancelled
+  attendees     String?
+  notes         String?
+  rating        Int? // 1–5
+  createdAt     DateTime  @default(now())
+
+  @@index([propertyId])
+}
+
+model Photo {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  url        String? // remote URL (listing/streetview/other)
+  localPath  String? // path under /public/uploads for uploads
+  source     String   @default("other") // listing | streetview | upload | other
+  caption    String?
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId])
+}
+
+model Note {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  timestamp  DateTime @default(now())
+  body       String
+
+  @@index([propertyId])
+}
+
+// Cache of Nominatim lookups, keyed by the normalised query string, so we
+// never re-geocode the same address (respects Nominatim's usage policy).
+model GeocodeCache {
+  id          String   @id @default(cuid())
+  query       String   @unique
+  lat         Float?
+  lng         Float?
+  displayName String?
+  status      String // ok | ambiguous | failed
+  provider    String   @default("nominatim")
+  createdAt   DateTime @default(now())
+}
+
+model DueDiligenceItem {
+  id         String    @id @default(cuid())
+  propertyId String
+  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  label      String
+  done       Boolean   @default(false)
+  dueDate    DateTime?
+  sortOrder  Int       @default(0)
+
+  @@index([propertyId])
+}
+
+// ---- Criteria assessment feature -------------------------------------------
+
+// The people doing the assessing (e.g. the two of us). Placeholder names are
+// seeded and renameable in Criteria settings.
+model Person {
+  id          String                @id @default(cuid())
+  name        String
+  sortOrder   Int                   @default(0)
+  active      Boolean               @default(true)
+  createdAt   DateTime              @default(now())
+  assessments CriterionAssessment[]
+}
+
+// A thing we judge each house on. `type` drives the input control; `options`
+// holds the JSON string array for `choice` type.
+model Criterion {
+  id          String                @id @default(cuid())
+  label       String
+  type        String                @default("verdict") // verdict | rating | choice | boolean | text
+  options     String? // JSON string[] for choice type
+  mustHave    Boolean               @default(false) // a must-have; a "no"/deal-breaker here is significant
+  weight      Float                 @default(1)
+  active      Boolean               @default(true)
+  sortOrder   Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  assessments CriterionAssessment[]
+}
+
+// One person's assessment of one criterion for one property. Unique per
+// (property, criterion, person) so each person has their own independent view.
+model CriterionAssessment {
+  id          String    @id @default(cuid())
+  propertyId  String
+  property    Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  criterionId String
+  criterion   Criterion @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+  personId    String
+  person      Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  // Single value column, interpreted per the criterion's type:
+  //  verdict → "yes"|"maybe"|"no"; rating → "1".."5"; choice → option string;
+  //  boolean → "true"|"false"; text → free text.
+  value     String?
+  notes     String?
+  flag      String? // love | concern | deal_breaker
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([propertyId, criterionId, personId])
+  @@index([propertyId])
+  @@index([criterionId])
+  @@index([personId])
+}
